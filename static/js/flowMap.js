@@ -1,26 +1,39 @@
-// Visualizaciones tipo "mapa de flujo" (estilo Sankey) para el algoritmo
-// genetico. Ambas variantes comparten el mismo lenguaje visual:
-//   - renderFlowMap: TODA la poblacion en una transicion de generacion,
-//     nodos de la generacion anterior (izquierda) conectados con los de la
-//     nueva generacion (derecha).
-//   - renderIndividualFlowMap: el linaje COMPLETO y lineal de un solo
-//     individuo, un nodo por generacion, encadenados de izquierda a
-//     derecha desde la semilla (generacion 0) hasta el resultado final.
+// Mapa de flujo evolutivo UNIFICADO: dibuja el linaje COMPLETO de la
+// poblacion (todas las generaciones vistas hasta ahora) como una unica red
+// de nodos (individuos) conectados de izquierda a derecha, generacion tras
+// generacion. La vista es interactiva:
+//   - Pasar el mouse sobre un individuo muestra un tooltip con su
+//     operacion, puntaje y padres, y resalta las conexiones de las que
+//     proviene (de donde viene ese individuo).
+//   - Hacer click en un individuo fija ("pinea") el resaltado de TODO su
+//     linaje, desde la generacion 0 hasta la generacion en la que se hizo
+//     click, atenuando el resto de la red.
 //
 // Color de cada linea/nodo segun el tipo de transicion:
 //   azul     = elitismo o copia directa (un solo padre, sin recombinar)
 //   morado   = cruce real entre dos padres
 //   naranja (punteado) = hubo mutacion en ese paso (tiene prioridad)
-//   verde    = nodo destacado (mejor individuo / resultado final)
-//   gris     = nodo de origen (generacion anterior / semilla)
+//   verde    = mejor individuo de esa generacion
+//   gris     = semilla (individuo de la generacion 0)
+//
+// El renderizado es INCREMENTAL: cada llamada a `update()` solo agrega las
+// columnas (generaciones) nuevas que aun no se hayan dibujado, en vez de
+// reconstruir todo el SVG, para que ejecuciones largas sigan siendo fluidas.
 
 const NS = "http://www.w3.org/2000/svg";
 
-const COLOR_SOURCE = "#6b7793"; // nodos de origen, neutros
+const COLOR_SOURCE = "#6b7793"; // nodos semilla, neutros
 const COLOR_KEPT = "#5b8def"; // azul - elitismo o copia directa sin cruce
 const COLOR_CROSSOVER = "#b06fe0"; // morado - cruce real entre dos padres
 const COLOR_MUTATION = "#e2a33a"; // naranja - hubo mutacion
-const COLOR_BEST = "#4ecb71"; // verde - nodo destacado
+const COLOR_BEST = "#4ecb71"; // verde - mejor de la generacion
+
+const CROSSOVER_LABELS = {
+  one_point: "un punto",
+  two_point: "dos puntos",
+  uniform: "uniforme",
+  blend: "mezcla (blend)",
+};
 
 function svgEl(tag, attrs) {
   const e = document.createElementNS(NS, tag);
@@ -28,20 +41,6 @@ function svgEl(tag, attrs) {
     e.setAttribute(key, attrs[key]);
   }
   return e;
-}
-
-function makeGradientEdge(defs, id, x1, y1, x2, y2, fromColor, toColor) {
-  const grad = svgEl("linearGradient", {
-    id,
-    gradientUnits: "userSpaceOnUse",
-    x1: String(x1),
-    y1: String(y1),
-    x2: String(x2),
-    y2: String(y2),
-  });
-  grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": fromColor }));
-  grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": toColor }));
-  defs.appendChild(grad);
 }
 
 function curvePath(x1, y1, x2, y2) {
@@ -107,223 +106,369 @@ function edgesForRecord(rec) {
   return { parents: rec.parent_idx.slice(), ...info };
 }
 
-/**
- * Dibuja el mapa de flujo de la transicion generacion (N-1) -> N dentro de
- * `container`, usando los registros de linaje incluidos en `state.extra`.
- */
-export function renderFlowMap(container, genLabelEl, state, problemMeta) {
-  if (genLabelEl) genLabelEl.textContent = state.iteration;
-
-  const lineage = state.extra && state.extra.lineage;
-  container.innerHTML = "";
-
-  if (!lineage || !lineage.length) {
-    container.innerHTML =
-      '<p class="hint">Esperando la primera generacion con cruces...</p>';
-    return;
-  }
-
-  const n = lineage.length;
-  const rowH = 18;
-  const width = 460;
-  const height = Math.max(n * rowH, 80) + rowH;
-  const leftX = 34;
-  const rightX = width - 34;
-  const r = 4.5;
-
-  const fits = state.extra.population_fitness;
-  const maximize = problemMeta ? problemMeta.maximize : true;
-  const bestIdx = findBestIndex(fits, maximize);
-
-  const yFor = (i) => rowH / 2 + i * rowH + rowH / 2;
-
-  const svg = svgEl("svg", {
-    width: String(width),
-    height: String(height),
-    viewBox: `0 0 ${width} ${height}`,
-    class: "flowmap-svg",
-    role: "img",
-    "aria-label": "Mapa de flujo de la generacion",
-  });
-
-  const defs = svgEl("defs", {});
-  const edgesGroup = svgEl("g", { class: "flowmap-edges" });
-  const nodesGroup = svgEl("g", { class: "flowmap-nodes" });
-
-  lineage.forEach((rec, childIdx) => {
-    const y2 = yFor(childIdx);
-    const { parents, color, label } = edgesForRecord(rec);
-    const mutated = !!(rec.mutated_genes && rec.mutated_genes.length);
-
-    parents.forEach((parentIdx, slot) => {
-      const y1 = yFor(parentIdx);
-      const gradId = `flowmap-grad-${childIdx}-${slot}`;
-      makeGradientEdge(defs, gradId, leftX, y1, rightX, y2, COLOR_SOURCE, color);
-
-      const path = svgEl("path", {
-        d: curvePath(leftX, y1, rightX, y2),
-        class: "flowmap-edge" + (mutated ? " flowmap-edge-mutated" : ""),
-        stroke: `url(#${gradId})`,
-        fill: "none",
-      });
-      const title = svgEl("title", {});
-      title.textContent = `#${parentIdx} \u2192 #${childIdx} (${label})`;
-      path.appendChild(title);
-      edgesGroup.appendChild(path);
-    });
-  });
-
-  for (let i = 0; i < n; i++) {
-    const circle = svgEl("circle", {
-      cx: String(leftX),
-      cy: String(yFor(i)),
-      r: String(r),
-      class: "flowmap-node flowmap-node-source",
-    });
-    const title = svgEl("title", {});
-    title.textContent = `Generacion anterior \u00b7 #${i}`;
-    circle.appendChild(title);
-    nodesGroup.appendChild(circle);
-  }
-
-  lineage.forEach((rec, i) => {
-    const { color, label } = edgesForRecord(rec);
-    const isBest = i === bestIdx;
-    const circle = svgEl("circle", {
-      cx: String(rightX),
-      cy: String(yFor(i)),
-      r: String(isBest ? r + 2.5 : r),
-      class: "flowmap-node flowmap-node-target" + (isBest ? " flowmap-node-best" : ""),
-      fill: isBest ? COLOR_BEST : color,
-    });
-    const title = svgEl("title", {});
-    title.textContent = `#${i} \u00b7 ${label}${isBest ? " \u00b7 mejor individuo" : ""}`;
-    circle.appendChild(title);
-    nodesGroup.appendChild(circle);
-  });
-
-  svg.appendChild(defs);
-  svg.appendChild(edgesGroup);
-  svg.appendChild(nodesGroup);
-  container.appendChild(svg);
+function key(gen, idx) {
+  return `${gen}:${idx}`;
 }
 
 /**
- * Dibuja el linaje COMPLETO y lineal de un individuo (desde la generacion 0
- * hasta la generacion final) como una cadena de nodos conectados de
- * izquierda a derecha, con el mismo lenguaje visual que `renderFlowMap`.
- * La posicion vertical de cada nodo refleja su fitness (mejor arriba, peor
- * abajo), asi que la forma de la cadena tambien deja ver la evolucion del
- * fitness junto con el tipo de transformacion en cada paso.
+ * Vista interactiva del linaje evolutivo completo. Se instancia una vez
+ * por pagina y se reutiliza durante toda la sesion; `reset()` se llama al
+ * iniciar una nueva ejecucion.
  */
-export function renderIndividualFlowMap(container, chain, problemMeta) {
-  container.innerHTML = "";
-  if (!chain || !chain.length) {
-    container.innerHTML =
-      '<p class="hint">Selecciona un individuo para ver su linaje completo.</p>';
-    return;
+export class FlowMapView {
+  constructor(container, tooltipEl, onSelect) {
+    this.container = container;
+    this.tooltipEl = tooltipEl;
+    this.onSelect = onSelect || (() => {});
+    this._resetState();
+    this._bindEvents();
   }
 
-  const n = chain.length;
-  const colW = 74;
-  const marginX = 30;
-  const marginY = 26;
-  const width = Math.max((n - 1) * colW, 40) + marginX * 2;
-  const height = 190;
-
-  const maximize = problemMeta ? problemMeta.maximize : true;
-  const fitnessValues = chain.map((s) => (s.fitness == null ? 0 : s.fitness));
-  let minF = Math.min(...fitnessValues);
-  let maxF = Math.max(...fitnessValues);
-  if (minF === maxF) {
-    minF -= 1;
-    maxF += 1;
+  _resetState() {
+    this.container.innerHTML =
+      '<p class="hint">Esperando la primera generacion...</p>';
+    this.svg = null;
+    this.defs = null;
+    this.edgesGroup = null;
+    this.nodesGroup = null;
+    this.labelsGroup = null;
+    this.popSize = 0;
+    this.lastGen = -1;
+    this.rowH = 12;
+    this.colW = 52;
+    this.marginX = 28;
+    this.marginY = 18;
+    this.nodesByKey = new Map();
+    this.metaByKey = new Map();
+    this.incomingByKey = new Map(); // destKey -> [{fromKey, el}]
+    this.chainEls = [];
+    this.hoverEls = [];
+    this.selectedKey = null;
   }
 
-  // Mejor fitness arriba (y pequeno), peor abajo (y grande).
-  const yFor = (fitness) => {
-    const t = (fitness - minF) / (maxF - minF);
-    const better = maximize ? 1 - t : t;
-    return marginY + better * (height - marginY * 2 - 14);
-  };
-  const xFor = (i) => marginX + i * colW;
+  reset() {
+    this._resetState();
+  }
 
-  const svg = svgEl("svg", {
-    width: String(width),
-    height: String(height),
-    viewBox: `0 0 ${width} ${height}`,
-    class: "flowmap-svg trace-flowmap-svg",
-    role: "img",
-    "aria-label": "Linaje completo del individuo",
-  });
-
-  const defs = svgEl("defs", {});
-  const edgesGroup = svgEl("g", { class: "flowmap-edges" });
-  const nodesGroup = svgEl("g", { class: "flowmap-nodes" });
-
-  for (let i = 1; i < n; i++) {
-    const step = chain[i];
-    const mutated = !!(step.mutatedGenes && step.mutatedGenes.length);
-    const info = classifyTransition(step.kind, !!step.crossoverMethod, mutated);
-    const x1 = xFor(i - 1);
-    const y1 = yFor(chain[i - 1].fitness == null ? 0 : chain[i - 1].fitness);
-    const x2 = xFor(i);
-    const y2 = yFor(step.fitness == null ? 0 : step.fitness);
-    const gradId = `trace-grad-${i}`;
-    makeGradientEdge(defs, gradId, x1, y1, x2, y2, COLOR_SOURCE, info.color);
-
-    const path = svgEl("path", {
-      d: curvePath(x1, y1, x2, y2),
-      class: "flowmap-edge" + (mutated ? " flowmap-edge-mutated" : ""),
-      stroke: `url(#${gradId})`,
-      fill: "none",
+  _ensureSvg(popSize) {
+    if (this.svg) return;
+    this.popSize = popSize;
+    const height = this.marginY * 2 + popSize * this.rowH;
+    this.svg = svgEl("svg", {
+      width: String(this.marginX * 2 + this.colW),
+      height: String(height),
+      viewBox: `0 0 ${this.marginX * 2 + this.colW} ${height}`,
+      class: "flowmap-svg unified-flowmap-svg",
+      role: "img",
+      "aria-label": "Mapa de flujo evolutivo completo",
     });
-    const title = svgEl("title", {});
-    title.textContent = `Generacion ${i - 1} \u2192 ${i} (${info.label})`;
-    path.appendChild(title);
-    edgesGroup.appendChild(path);
+    this.defs = svgEl("defs", {});
+    this._ensureSharedGradients();
+    this.edgesGroup = svgEl("g", { class: "flowmap-edges" });
+    this.nodesGroup = svgEl("g", { class: "flowmap-nodes" });
+    this.labelsGroup = svgEl("g", { class: "flowmap-gen-labels" });
+    this.svg.appendChild(this.defs);
+    this.svg.appendChild(this.edgesGroup);
+    this.svg.appendChild(this.nodesGroup);
+    this.svg.appendChild(this.labelsGroup);
+    this.container.innerHTML = "";
+    this.container.appendChild(this.svg);
   }
 
-  chain.forEach((step, i) => {
-    const isLast = i === n - 1;
-    const x = xFor(i);
-    const y = yFor(step.fitness == null ? 0 : step.fitness);
+  // Gradientes horizontales (gris -> color) compartidos por TODAS las
+  // aristas de una misma categoria, en vez de uno por arista: como usan
+  // objectBoundingBox, un mismo <linearGradient> sirve para cualquier
+  // curva sin importar sus coordenadas reales, lo que evita crear miles de
+  // definiciones y mantiene el SVG ligero en ejecuciones largas.
+  _ensureSharedGradients() {
+    const specs = [
+      ["kept", COLOR_KEPT],
+      ["crossover", COLOR_CROSSOVER],
+      ["mutation", COLOR_MUTATION],
+    ];
+    specs.forEach(([id, color]) => {
+      const grad = svgEl("linearGradient", {
+        id: `flowmap-grad-${id}`,
+        x1: "0%",
+        y1: "0%",
+        x2: "100%",
+        y2: "0%",
+      });
+      grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": COLOR_SOURCE }));
+      grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": color }));
+      this.defs.appendChild(grad);
+    });
+  }
 
-    let color = COLOR_SOURCE;
-    let label = "individuo inicial (semilla)";
-    if (i > 0) {
-      const mutated = !!(step.mutatedGenes && step.mutatedGenes.length);
-      const info = classifyTransition(step.kind, !!step.crossoverMethod, mutated);
-      color = info.color;
-      label = info.label;
+  _gradientFor(label) {
+    if (label === "mutacion") return "url(#flowmap-grad-mutation)";
+    if (label === "cruce") return "url(#flowmap-grad-crossover)";
+    return "url(#flowmap-grad-kept)";
+  }
+
+  _yFor(idx) {
+    return this.marginY + idx * this.rowH + this.rowH / 2;
+  }
+
+  _xFor(gen) {
+    return this.marginX + gen * this.colW;
+  }
+
+  _growTo(gen) {
+    const width = this._xFor(gen) + this.marginX;
+    if (Number(this.svg.getAttribute("width")) < width) {
+      this.svg.setAttribute("width", String(width));
+      const height = this.svg.getAttribute("height");
+      this.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     }
+  }
 
-    const circle = svgEl("circle", {
-      cx: String(x),
-      cy: String(y),
-      r: String(isLast ? 6.5 : 5),
-      class: "flowmap-node flowmap-node-target" + (isLast ? " flowmap-node-best" : ""),
-      fill: isLast ? COLOR_BEST : color,
-    });
-    const title = svgEl("title", {});
-    title.textContent = `Generacion ${step.generation} \u00b7 ${label}${
-      step.fitness != null ? ` \u00b7 fitness ${step.fitness.toFixed(3)}` : ""
-    }${isLast ? " \u00b7 resultado final" : ""}`;
-    circle.appendChild(title);
-    nodesGroup.appendChild(circle);
+  /**
+   * Asegura que la red incluya todas las generaciones disponibles en
+   * `states` (0..states.length-1), agregando solo las columnas nuevas.
+   */
+  update(states, problemMeta) {
+    if (!states || !states.length) return;
+    const popSize = states[0].population.length;
+    this._ensureSvg(popSize);
+    this._growTo(states.length - 1);
+
+    const maximize = problemMeta ? problemMeta.maximize : true;
+    for (let gen = this.lastGen + 1; gen < states.length; gen++) {
+      this._addGeneration(gen, states[gen], maximize);
+    }
+    this.lastGen = states.length - 1;
+  }
+
+  _addGeneration(gen, state, maximize) {
+    const x = this._xFor(gen);
+    const fits = state.extra && state.extra.population_fitness;
+    const bestIdx = findBestIndex(fits, maximize);
+    const lineage = gen > 0 ? state.extra && state.extra.lineage : null;
+
+    for (let idx = 0; idx < this.popSize; idx++) {
+      const y = this._yFor(idx);
+      const k = key(gen, idx);
+      let color = COLOR_SOURCE;
+      let label = "semilla (gen 0)";
+      let parents = [];
+      let mutatedCount = 0;
+      let crossoverMethod = null;
+
+      if (gen > 0 && lineage && lineage[idx]) {
+        const rec = lineage[idx];
+        const info = edgesForRecord(rec);
+        color = info.color;
+        label = info.label;
+        parents = info.parents;
+        mutatedCount = (rec.mutated_genes && rec.mutated_genes.length) || 0;
+        crossoverMethod = rec.crossover_method || null;
+
+        parents.forEach((parentIdx) => {
+          const fromKey = key(gen - 1, parentIdx);
+          const x1 = this._xFor(gen - 1);
+          const y1 = this._yFor(parentIdx);
+          const path = svgEl("path", {
+            d: curvePath(x1, y1, x, y),
+            class: "flowmap-edge" + (mutatedCount ? " flowmap-edge-mutated" : ""),
+            stroke: this._gradientFor(label),
+            fill: "none",
+            "data-from": fromKey,
+            "data-to": k,
+          });
+          this.edgesGroup.appendChild(path);
+          if (!this.incomingByKey.has(k)) this.incomingByKey.set(k, []);
+          this.incomingByKey.get(k).push({ fromKey, el: path });
+        });
+      }
+
+      const isBest = idx === bestIdx;
+      const circle = svgEl("circle", {
+        cx: String(x),
+        cy: String(y),
+        r: String(isBest ? 4.5 : 3),
+        class:
+          "flowmap-node" +
+          (gen === 0 ? " flowmap-node-source" : " flowmap-node-target") +
+          (isBest ? " flowmap-node-best" : ""),
+        fill: isBest ? COLOR_BEST : color,
+        "data-gen": String(gen),
+        "data-idx": String(idx),
+      });
+      this.nodesGroup.appendChild(circle);
+      this.nodesByKey.set(k, circle);
+      this.metaByKey.set(k, {
+        gen,
+        idx,
+        fitness: fits ? fits[idx] : null,
+        label,
+        parents,
+        parentKeys: parents.map((p) => key(gen - 1, p)),
+        mutatedCount,
+        crossoverMethod,
+        isBest,
+      });
+    }
 
     const genLabel = svgEl("text", {
       x: String(x),
-      y: String(height - 4),
+      y: String(this.marginY * 2 + this.popSize * this.rowH - 4),
       class: "flowmap-gen-label",
       "text-anchor": "middle",
     });
-    genLabel.textContent = String(step.generation);
-    nodesGroup.appendChild(genLabel);
-  });
+    genLabel.textContent = String(gen);
+    this.labelsGroup.appendChild(genLabel);
+  }
 
-  svg.appendChild(defs);
-  svg.appendChild(edgesGroup);
-  svg.appendChild(nodesGroup);
-  container.appendChild(svg);
+  _bindEvents() {
+    this.container.addEventListener("mousemove", (evt) => {
+      if (!this.tooltipEl || this.tooltipEl.hidden) return;
+      this.tooltipEl.style.left = `${evt.clientX + 14}px`;
+      this.tooltipEl.style.top = `${evt.clientY + 14}px`;
+    });
+    this.container.addEventListener("mouseover", (evt) => {
+      const circle = evt.target.closest && evt.target.closest("circle.flowmap-node");
+      if (circle) this._hoverNode(circle);
+    });
+    this.container.addEventListener("mouseout", (evt) => {
+      const circle = evt.target.closest && evt.target.closest("circle.flowmap-node");
+      if (!circle) return;
+      const related = evt.relatedTarget;
+      if (related && circle.contains(related)) return;
+      this._clearHover();
+    });
+    this.container.addEventListener("click", (evt) => {
+      const circle = evt.target.closest && evt.target.closest("circle.flowmap-node");
+      if (!circle) return;
+      const gen = Number(circle.getAttribute("data-gen"));
+      const idx = Number(circle.getAttribute("data-idx"));
+      if (this.selectedKey === key(gen, idx)) {
+        this.clearChain();
+        this.onSelect(null, null);
+        return;
+      }
+      this.onSelect(gen, idx);
+    });
+  }
+
+  /**
+   * Recorre hacia atras TODO el arbol de ancestros de `startKey` (ambos
+   * padres en cada cruce, recursivamente, hasta la generacion 0),
+   * devolviendo el conjunto de nodos y aristas involucrados. Usa un set de
+   * visitados para no repetir trabajo cuando distintas ramas comparten un
+   * mismo ancestro, manteniendo el costo acotado por el tamano total del
+   * grafo (generaciones x poblacion) en vez de crecer exponencialmente.
+   */
+  _collectAncestry(startKey) {
+    const nodeKeys = new Set();
+    const edges = []; // {fromKey, toKey}
+    const queue = [startKey];
+    while (queue.length) {
+      const k = queue.shift();
+      if (nodeKeys.has(k)) continue;
+      nodeKeys.add(k);
+      const meta = this.metaByKey.get(k);
+      if (!meta || !meta.parentKeys || !meta.parentKeys.length) continue;
+      meta.parentKeys.forEach((pk) => {
+        edges.push({ fromKey: pk, toKey: k });
+        if (!nodeKeys.has(pk)) queue.push(pk);
+      });
+    }
+    return { nodeKeys, edges };
+  }
+
+  /**
+   * Marca con `nodeClass`/`edgeClass` todos los nodos y aristas del
+   * ancestro completo de `startKey`, acumulando los elementos tocados en
+   * `touched` para poder limpiarlos despues.
+   */
+  _applyAncestryHighlight(startKey, nodeClass, edgeClass, touched) {
+    const { nodeKeys, edges } = this._collectAncestry(startKey);
+    nodeKeys.forEach((k) => {
+      const el = this.nodesByKey.get(k);
+      if (el) {
+        el.classList.add(nodeClass);
+        touched.push(el);
+      }
+    });
+    edges.forEach(({ fromKey, toKey }) => {
+      const incoming = this.incomingByKey.get(toKey) || [];
+      incoming.forEach((e) => {
+        if (e.fromKey === fromKey) {
+          e.el.classList.add(edgeClass);
+          touched.push(e.el);
+        }
+      });
+    });
+  }
+
+  _hoverNode(circle) {
+    this._clearHover();
+    const gen = Number(circle.getAttribute("data-gen"));
+    const idx = Number(circle.getAttribute("data-idx"));
+    const k = key(gen, idx);
+    const meta = this.metaByKey.get(k);
+    if (!meta) return;
+
+    this.svg.classList.add("has-hover");
+    this._applyAncestryHighlight(k, "flowmap-hl", "flowmap-hl", this.hoverEls);
+
+    this._showTooltip(meta);
+  }
+
+  _clearHover() {
+    this.hoverEls.forEach((el) => el.classList.remove("flowmap-hl"));
+    this.hoverEls = [];
+    if (this.svg) this.svg.classList.remove("has-hover");
+    this._hideTooltip();
+  }
+
+  _showTooltip(meta) {
+    if (!this.tooltipEl) return;
+    const parts = [];
+    parts.push(`<strong>Generacion ${meta.gen} \u00b7 #${meta.idx}</strong>`);
+    const methodSuffix = meta.crossoverMethod
+      ? ` (${CROSSOVER_LABELS[meta.crossoverMethod] || meta.crossoverMethod})`
+      : "";
+    parts.push(`Operacion: ${meta.label}${methodSuffix}`);
+    if (meta.fitness != null) parts.push(`Fitness: ${meta.fitness.toFixed(4)}`);
+    if (meta.parents.length) {
+      const label = meta.parents.length > 1 ? "Padres" : "Padre";
+      parts.push(`${label}: ${meta.parents.map((p) => `#${p}`).join(", ")}`);
+    }
+    if (meta.mutatedCount) parts.push(`${meta.mutatedCount} gen(es) mutado(s)`);
+    if (meta.isBest) parts.push("Mejor de la generacion");
+    this.tooltipEl.innerHTML = parts.map((p) => `<div>${p}</div>`).join("");
+    this.tooltipEl.hidden = false;
+  }
+
+  _hideTooltip() {
+    if (this.tooltipEl) this.tooltipEl.hidden = true;
+  }
+
+  /**
+   * Resalta el linaje COMPLETO (todos los ancestros, incluyendo AMBOS
+   * padres en cada cruce, desde la generacion 0 hasta el individuo
+   * indicado) y atenua el resto de la red.
+   */
+  highlightChain(gen, idx) {
+    this.clearChain();
+    if (gen == null || idx == null || !this.svg) return;
+    const k = key(gen, idx);
+    if (!this.nodesByKey.has(k)) return;
+
+    this.svg.classList.add("has-chain");
+    this._applyAncestryHighlight(k, "flowmap-chain-node", "flowmap-chain-edge", this.chainEls);
+    this.selectedKey = k;
+  }
+
+  clearChain() {
+    this.chainEls.forEach((el) =>
+      el.classList.remove("flowmap-chain-node", "flowmap-chain-edge")
+    );
+    this.chainEls = [];
+    if (this.svg) this.svg.classList.remove("has-chain");
+    this.selectedKey = null;
+  }
 }
+

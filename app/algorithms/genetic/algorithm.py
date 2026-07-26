@@ -103,6 +103,18 @@ class GeneticAlgorithm(Metaheuristic):
                 parent2, idx2 = selection_fn(
                     population, fitness, maximize, self.rng, tournament_size=p.tournament_size
                 )
+                # Evitar que ambos padres sean el mismo individuo: si el
+                # metodo de seleccion elige el mismo indice dos veces (algo
+                # posible por azar, sobre todo con poblaciones pequenas),
+                # se reintenta la seleccion del segundo padre hasta obtener
+                # uno distinto (o hasta agotar los intentos, en cuyo caso se
+                # deja tal cual para no bloquear poblaciones de tamano 1).
+                retries = 0
+                while idx2 == idx1 and retries < 20 and p.population_size > 1:
+                    parent2, idx2 = selection_fn(
+                        population, fitness, maximize, self.rng, tournament_size=p.tournament_size
+                    )
+                    retries += 1
                 crossover_applied = bool(self.rng.random() < p.crossover_rate)
                 if crossover_applied:
                     child1, child2, crossover_detail = crossover_fn(parent1, parent2, self.rng)

@@ -15,8 +15,7 @@ import {
 import { buildForm, readFormValues } from "./formBuilder.js";
 import { SurfaceRenderer, renderStringViz } from "./vizCanvas.js";
 import { createFitnessChart } from "./fitnessChart.js";
-import { renderLineage } from "./lineageFlow.js";
-import { renderFlowMap, renderIndividualFlowMap } from "./flowMap.js";
+import { FlowMapView } from "./flowMap.js";
 import { traceIndividualLineage, renderIndividualTrace } from "./individualTrace.js";
 
 const el = (id) => document.getElementById(id);
@@ -44,17 +43,16 @@ const statBest = el("stat-best");
 const statAvg = el("stat-avg");
 const statWorst = el("stat-worst");
 const statBestSolution = el("stat-best-solution");
-const lineageBody = el("lineage-body");
-const lineageGen = el("lineage-gen");
 const flowmapBody = el("flowmap-body");
-const flowmapGen = el("flowmap-gen");
+const flowmapTooltip = el("flowmap-tooltip");
 const traceIndexInput = el("trace-index");
 const btnTraceBest = el("btn-trace-best");
-const traceFlowmap = el("trace-flowmap");
+const btnTraceClear = el("btn-trace-clear");
 const traceBody = el("trace-body");
 
 const surface = new SurfaceRenderer(vizCanvasEl);
 const fitnessChart = createFitnessChart(fitnessChartEl);
+const flowMapView = new FlowMapView(flowmapBody, flowmapTooltip, onFlowMapSelect);
 
 let algorithms = [];
 let currentAlgorithm = null;
@@ -88,6 +86,7 @@ async function init() {
   btnReplayPlay.addEventListener("click", onReplayPlayToggle);
   traceIndexInput.addEventListener("input", onTraceIndexInput);
   btnTraceBest.addEventListener("click", onTraceBest);
+  btnTraceClear.addEventListener("click", onTraceClear);
   vizCanvasEl.addEventListener("click", onCanvasClickForTrace);
 
   onAlgorithmChange();
@@ -132,18 +131,11 @@ function resetVizForNewRun(meta) {
   replayRange.max = 0;
   replayValue.textContent = "0";
   replayMax.textContent = "0";
-  lineageGen.textContent = "-";
-  lineageBody.innerHTML =
-    '<p class="hint">Esperando la primera generacion con cruces...</p>';
-  flowmapGen.textContent = "-";
-  flowmapBody.innerHTML =
-    '<p class="hint">Esperando la primera generacion con cruces...</p>';
+  flowMapView.reset();
   lastState = null;
   traceEnabled = false;
   traceIndexInput.value = 0;
   traceIndexInput.max = "";
-  traceFlowmap.innerHTML =
-    '<p class="hint">Selecciona un individuo para ver su linaje completo.</p>';
   traceBody.innerHTML =
     '<p class="hint">Selecciona un individuo para ver su linaje completo.</p>';
 }
@@ -165,12 +157,34 @@ function renderState(state) {
     renderStringViz(stringVizEl, problemMeta.target || "", state.best_solution);
   }
 
-  renderLineage(lineageBody, lineageGen, state, problemMeta);
-  renderFlowMap(flowmapBody, flowmapGen, state, problemMeta);
+  flowMapView.update(states, problemMeta);
 
   lastState = state;
   traceIndexInput.max = state.population.length - 1;
   if (traceEnabled) updateTrace();
+}
+
+function selectIndividual(gen, idx) {
+  flowMapView.highlightChain(gen, idx);
+  const chain = traceIndividualLineage(states, gen, idx);
+  renderIndividualTrace(traceBody, chain, problemMeta);
+}
+
+function onFlowMapSelect(gen, idx) {
+  if (gen == null) {
+    onTraceClear();
+    return;
+  }
+  traceEnabled = true;
+  traceIndexInput.value = idx;
+  selectIndividual(gen, idx);
+}
+
+function onTraceClear() {
+  traceEnabled = false;
+  flowMapView.clearChain();
+  traceBody.innerHTML =
+    '<p class="hint">Selecciona un individuo para ver su linaje completo.</p>';
 }
 
 function updateTrace() {
@@ -180,9 +194,7 @@ function updateTrace() {
   const maxIdx = lastState.population.length - 1;
   idx = Math.min(Math.max(idx, 0), maxIdx);
   traceIndexInput.value = idx;
-  const chain = traceIndividualLineage(states, lastState.iteration, idx);
-  renderIndividualFlowMap(traceFlowmap, chain, problemMeta);
-  renderIndividualTrace(traceBody, chain, problemMeta);
+  selectIndividual(lastState.iteration, idx);
 }
 
 function onTraceIndexInput() {
@@ -229,7 +241,6 @@ function onCanvasClickForTrace(evt) {
   traceEnabled = true;
   updateTrace();
 }
-
 function statusLabel(status) {
   return (
     {

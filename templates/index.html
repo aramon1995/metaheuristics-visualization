@@ -84,55 +84,21 @@
 
       <div class="card flowmap-card">
         <div class="lineage-header">
-          <h3>Mapa de flujo evolutivo &mdash; generacion <span id="flowmap-gen">-</span></h3>
+          <h3>Mapa de flujo evolutivo &mdash; linaje completo</h3>
           <div class="lineage-legend">
-            <span class="legend-item legend-source">Generacion anterior</span>
-            <span class="legend-item legend-parent">Elitismo</span>
+            <span class="legend-item legend-source">Semilla (gen 0)</span>
+            <span class="legend-item legend-parent">Elitismo / copia directa</span>
             <span class="legend-item legend-crossover">Cruce</span>
             <span class="legend-item legend-mutation">Mutacion</span>
-            <span class="legend-item legend-final">Mejor individuo</span>
+            <span class="legend-item legend-final">Mejor de la generacion</span>
           </div>
         </div>
         <p class="hint">
-          Cada linea conecta un individuo de la generacion anterior (izquierda) con el individuo de la
-          nueva generacion que ayudo a formar (derecha). El color de la linea indica si ese individuo
-          paso por elitismo, cruce o mutacion.
-        </p>
-        <div id="flowmap-body" class="flowmap-body">
-          <p class="hint">Esperando la primera generacion con cruces...</p>
-        </div>
-      </div>
-
-      <div class="card lineage-card">
-        <div class="lineage-header">
-          <h3>Flujo de cruce y mutacion &mdash; generacion <span id="lineage-gen">-</span></h3>
-          <div class="lineage-legend">
-            <span class="legend-item legend-parent">Padres</span>
-            <span class="legend-item legend-crossover">Cruce</span>
-            <span class="legend-item legend-mutation">Mutacion</span>
-            <span class="legend-item legend-final">Individuo final</span>
-          </div>
-        </div>
-        <div id="lineage-body" class="lineage-body">
-          <p class="hint">Inicia una ejecucion para ver como se forma cada individuo de la siguiente poblacion.</p>
-        </div>
-      </div>
-
-      <div class="card trace-card">
-        <div class="lineage-header">
-          <h3>Rastreo de un individuo: linaje completo</h3>
-          <div class="lineage-legend">
-            <span class="legend-item legend-seed">Semilla (gen 0)</span>
-            <span class="legend-item legend-kept">Se mantuvo</span>
-            <span class="legend-item legend-crossover">Vino del otro padre</span>
-            <span class="legend-item legend-mutation">Mutado</span>
-            <span class="legend-item legend-blend">Mezcla (blend)</span>
-          </div>
-        </div>
-        <p class="hint">
-          Elige el numero de un individuo de la poblacion mostrada (o haz clic sobre un punto del mapa de
-          busqueda, si el problema es continuo) para reconstruir toda su historia, generacion a generacion,
-          resaltando que genes se mantuvieron, cuales vinieron del otro padre por cruce y cuales mutaron.
+          Cada punto es un individuo de una generacion y cada linea lo conecta con el padre (o padres) del
+          que proviene, mostrando el linaje completo de todas las generaciones simuladas. Pasa el mouse
+          sobre un individuo para ver su operacion, puntaje y de donde viene. Haz click sobre uno para
+          resaltar todo su linaje, desde la generacion 0 hasta esa generacion, y atenuar el resto de la red.
+          Arrastra la esquina inferior derecha del panel para ajustar su alto.
         </p>
         <div class="trace-controls">
           <label class="inline-label">
@@ -140,9 +106,16 @@
             <input type="number" id="trace-index" min="0" value="0" />
           </label>
           <button id="btn-trace-best" class="btn">Rastrear el mejor</button>
+          <button id="btn-trace-clear" class="btn">Limpiar seleccion</button>
         </div>
-        <div id="trace-flowmap" class="trace-flowmap">
-          <p class="hint">Selecciona un individuo para ver su linaje completo.</p>
+        <div id="flowmap-body" class="flowmap-body"></div>
+        <div id="flowmap-tooltip" class="flowmap-tooltip" hidden></div>
+        <div class="lineage-legend trace-gene-legend">
+          <span class="legend-item legend-seed">Gen: semilla</span>
+          <span class="legend-item legend-kept">Gen: se mantuvo</span>
+          <span class="legend-item legend-crossover">Gen: vino del otro padre</span>
+          <span class="legend-item legend-mutation">Gen: mutado</span>
+          <span class="legend-item legend-blend">Gen: mezcla (blend)</span>
         </div>
         <div id="trace-body">
           <p class="hint">Selecciona un individuo para ver su linaje completo.</p>

@@ -44,6 +44,7 @@ export function traceIndividualLineage(states, generation, index) {
       const fits = state.extra && state.extra.population_fitness;
       chain.unshift({
         generation: 0,
+        index: indivIdx,
         genome,
         fitness: fits ? fits[indivIdx] : null,
         kind: "seed",
@@ -89,6 +90,7 @@ export function traceIndividualLineage(states, generation, index) {
 
     chain.unshift({
       generation: genIdx,
+      index: indivIdx,
       genome: rec.final_genome,
       fitness: rec.final_fitness,
       kind: rec.kind,

@@ -41,7 +41,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 20px;
   padding: 20px 28px 40px;
   align-items: start;
@@ -160,6 +160,7 @@ input[type="range"] {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-width: 0;
 }
 
 .viz-grid {
@@ -292,15 +293,59 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .flowmap-body {
-  max-height: 480px;
+  height: 480px;
+  min-height: 220px;
+  max-height: 90vh;
   overflow-y: auto;
   overflow-x: auto;
+  min-width: 0;
+  resize: vertical;
   background: #0d1220;
   border-radius: 8px;
   padding: 8px;
+}
+
+.flowmap-body::-webkit-resizer {
+  background-color: var(--panel-border);
+  border-radius: 0 0 6px 0;
+}
+
+.flowmap-body,
+.lineage-body,
+#trace-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--panel-border) transparent;
+}
+
+.flowmap-body::-webkit-scrollbar,
+.lineage-body::-webkit-scrollbar,
+#trace-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.flowmap-body::-webkit-scrollbar-track,
+.lineage-body::-webkit-scrollbar-track,
+#trace-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.flowmap-body::-webkit-scrollbar-thumb,
+.lineage-body::-webkit-scrollbar-thumb,
+#trace-body::-webkit-scrollbar-thumb {
+  background-color: var(--panel-border);
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+
+.flowmap-body::-webkit-scrollbar-thumb:hover,
+.lineage-body::-webkit-scrollbar-thumb:hover,
+#trace-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent);
 }
 
 .flowmap-svg {
@@ -321,26 +366,53 @@ canvas {
   stroke-width: 2;
 }
 
-.flowmap-edge {
-  stroke-width: 1.4;
-  opacity: 0.55;
+.flowmap-node {
+  cursor: pointer;
   transition: opacity 0.15s ease, stroke-width 0.15s ease;
 }
 
-.flowmap-edge:hover {
-  opacity: 1;
-  stroke-width: 2.6;
+.flowmap-edge {
+  stroke-width: 1.2;
+  opacity: 0.35;
+  transition: opacity 0.15s ease, stroke-width 0.15s ease;
 }
 
 .flowmap-edge-mutated {
-  stroke-width: 2;
-  opacity: 0.75;
+  stroke-width: 1.8;
+  opacity: 0.5;
   stroke-dasharray: 4 2;
 }
 
-.flowmap-edge-mutated:hover {
-  opacity: 1;
-  stroke-width: 3;
+.unified-flowmap-svg.has-hover .flowmap-edge,
+.unified-flowmap-svg.has-chain .flowmap-edge {
+  opacity: 0.06;
+}
+
+.unified-flowmap-svg.has-hover .flowmap-node,
+.unified-flowmap-svg.has-chain .flowmap-node {
+  opacity: 0.3;
+}
+
+.flowmap-edge.flowmap-hl {
+  opacity: 1 !important;
+  stroke-width: 2.4;
+}
+
+.flowmap-node.flowmap-hl {
+  opacity: 1 !important;
+  stroke: #fff;
+  stroke-width: 1.4;
+}
+
+.flowmap-edge.flowmap-chain-edge {
+  opacity: 1 !important;
+  stroke-width: 2.8;
+}
+
+.flowmap-node.flowmap-chain-node {
+  opacity: 1 !important;
+  stroke: #fff;
+  stroke-width: 2.2;
 }
 
 .flowmap-gen-label {
@@ -348,12 +420,22 @@ canvas {
   font-size: 9px;
 }
 
-.trace-flowmap {
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: #0d1220;
+.flowmap-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 60;
+  background: #131a29;
+  border: 1px solid var(--panel-border);
   border-radius: 8px;
-  padding: 8px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  max-width: 240px;
+}
+
+.trace-gene-legend {
+  margin-top: -2px;
 }
 
 .lineage-body {
