@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visualizador de Metaheuristicas</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Visualizador de Metaheuristicas</h1>
+    <p class="subtitle">Aprende como evolucionan los algoritmos geneticos generacion a generacion</p>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>1. Algoritmo</h2>
+        <label>
+          Metaheuristica
+          <select id="algorithm-select"></select>
+        </label>
+        <label>
+          Problema
+          <select id="problem-select"></select>
+        </label>
+        <p id="problem-description" class="hint"></p>
+      </section>
+
+      <section class="panel">
+        <h2>2. Parametros</h2>
+        <form id="params-form"></form>
+      </section>
+
+      <section class="panel">
+        <h2>3. Control de ejecucion</h2>
+        <div class="controls-row">
+          <button id="btn-start" class="btn btn-primary">Iniciar</button>
+          <button id="btn-pause" class="btn" disabled>Pausar</button>
+          <button id="btn-stop" class="btn btn-danger" disabled>Detener</button>
+        </div>
+        <label>
+          Velocidad (ms entre generaciones): <span id="speed-value">150</span>
+          <input type="range" id="speed-range" min="0" max="1000" step="10" value="150" />
+        </label>
+        <p id="status-line" class="hint">Sin ejecucion activa.</p>
+      </section>
+
+      <section class="panel" id="replay-panel" hidden>
+        <h2>4. Revision (replay)</h2>
+        <label>
+          Generacion: <span id="replay-value">0</span> / <span id="replay-max">0</span>
+          <input type="range" id="replay-range" min="0" max="0" step="1" value="0" />
+        </label>
+        <div class="controls-row">
+          <button id="btn-replay-play" class="btn">Reproducir</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="main-view">
+      <div class="viz-grid">
+        <div class="card">
+          <h3>Poblacion sobre el espacio de busqueda</h3>
+          <canvas id="viz-canvas" width="520" height="480"></canvas>
+          <div id="string-viz" class="string-viz" hidden></div>
+        </div>
+        <div class="card">
+          <h3>Evolucion del fitness</h3>
+          <canvas id="fitness-chart" width="520" height="480"></canvas>
+        </div>
+      </div>
+
+      <div class="card stats-card">
+        <h3>Estado actual</h3>
+        <div class="stats-row">
+          <div><span class="stat-label">Generacion</span><span id="stat-gen" class="stat-value">-</span></div>
+          <div><span class="stat-label">Mejor fitness</span><span id="stat-best" class="stat-value">-</span></div>
+          <div><span class="stat-label">Fitness promedio</span><span id="stat-avg" class="stat-value">-</span></div>
+          <div><span class="stat-label">Peor fitness</span><span id="stat-worst" class="stat-value">-</span></div>
+        </div>
+        <p><span class="stat-label">Mejor solucion:</span> <span id="stat-best-solution">-</span></p>
+      </div>
+
+      <div class="card flowmap-card">
+        <div class="lineage-header">
+          <h3>Mapa de flujo evolutivo &mdash; generacion <span id="flowmap-gen">-</span></h3>
+          <div class="lineage-legend">
+            <span class="legend-item legend-source">Generacion anterior</span>
+            <span class="legend-item legend-parent">Elitismo</span>
+            <span class="legend-item legend-crossover">Cruce</span>
+            <span class="legend-item legend-mutation">Mutacion</span>
+            <span class="legend-item legend-final">Mejor individuo</span>
+          </div>
+        </div>
+        <p class="hint">
+          Cada linea conecta un individuo de la generacion anterior (izquierda) con el individuo de la
+          nueva generacion que ayudo a formar (derecha). El color de la linea indica si ese individuo
+          paso por elitismo, cruce o mutacion.
+        </p>
+        <div id="flowmap-body" class="flowmap-body">
+          <p class="hint">Esperando la primera generacion con cruces...</p>
+        </div>
+      </div>
+
+      <div class="card lineage-card">
+        <div class="lineage-header">
+          <h3>Flujo de cruce y mutacion &mdash; generacion <span id="lineage-gen">-</span></h3>
+          <div class="lineage-legend">
+            <span class="legend-item legend-parent">Padres</span>
+            <span class="legend-item legend-crossover">Cruce</span>
+            <span class="legend-item legend-mutation">Mutacion</span>
+            <span class="legend-item legend-final">Individuo final</span>
+          </div>
+        </div>
+        <div id="lineage-body" class="lineage-body">
+          <p class="hint">Inicia una ejecucion para ver como se forma cada individuo de la siguiente poblacion.</p>
+        </div>
+      </div>
+
+      <div class="card trace-card">
+        <div class="lineage-header">
+          <h3>Rastreo de un individuo: linaje completo</h3>
+          <div class="lineage-legend">
+            <span class="legend-item legend-seed">Semilla (gen 0)</span>
+            <span class="legend-item legend-kept">Se mantuvo</span>
+            <span class="legend-item legend-crossover">Vino del otro padre</span>
+            <span class="legend-item legend-mutation">Mutado</span>
+            <span class="legend-item legend-blend">Mezcla (blend)</span>
+          </div>
+        </div>
+        <p class="hint">
+          Elige el numero de un individuo de la poblacion mostrada (o haz clic sobre un punto del mapa de
+          busqueda, si el problema es continuo) para reconstruir toda su historia, generacion a generacion,
+          resaltando que genes se mantuvieron, cuales vinieron del otro padre por cruce y cuales mutaron.
+        </p>
+        <div class="trace-controls">
+          <label class="inline-label">
+            Individuo #
+            <input type="number" id="trace-index" min="0" value="0" />
+          </label>
+          <button id="btn-trace-best" class="btn">Rastrear el mejor</button>
+        </div>
+        <div id="trace-flowmap" class="trace-flowmap">
+          <p class="hint">Selecciona un individuo para ver su linaje completo.</p>
+        </div>
+        <div id="trace-body">
+          <p class="hint">Selecciona un individuo para ver su linaje completo.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/js/vendor/chart.umd.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
