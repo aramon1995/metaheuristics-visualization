@@ -81,13 +81,35 @@ label {
 
 select,
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+textarea {
   background: #0d1220;
   border: 1px solid var(--panel-border);
   color: var(--text);
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+textarea {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.checkbox-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-row input {
+  margin: 0;
+}
+
+.hint.error {
+  color: var(--danger, #e0555c);
 }
 
 input[type="range"] {
@@ -369,6 +391,15 @@ canvas {
 .flowmap-node {
   cursor: pointer;
   transition: opacity 0.15s ease, stroke-width 0.15s ease;
+}
+
+/* La capa de resaltado (hover/click) se dibuja encima de los nodos reales
+   con las mismas coordenadas, asi que debe ser puramente visual: si
+   intercepta eventos de mouse, un nodo de la capa (sin data-gen/data-idx)
+   pasa a ser el objetivo del hit-test y produce un parpadeo infinito de
+   activacion/desactivacion apenas el mouse se mueve un pixel. */
+.flowmap-overlay {
+  pointer-events: none;
 }
 
 .flowmap-edge {

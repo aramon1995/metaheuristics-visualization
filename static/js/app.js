@@ -49,6 +49,14 @@ const traceIndexInput = el("trace-index");
 const btnTraceBest = el("btn-trace-best");
 const btnTraceClear = el("btn-trace-clear");
 const traceBody = el("trace-body");
+const customProblemPanel = el("custom-problem-panel");
+const customGeneType = el("custom-gene-type");
+const customN = el("custom-n");
+const customBounds = el("custom-bounds");
+const customExpression = el("custom-expression");
+const customVariables = el("custom-variables");
+const customMaximize = el("custom-maximize");
+const customError = el("custom-error");
 
 const surface = new SurfaceRenderer(vizCanvasEl);
 const fitnessChart = createFitnessChart(fitnessChartEl);
@@ -65,6 +73,31 @@ let isPaused = false;
 let replayTimer = null;
 let lastState = null;
 let traceEnabled = false;
+
+// Buffer de estados recibidos por websocket, para desacoplar la cadencia
+// de render (acotada a ~60fps via requestAnimationFrame) de la tasa de
+// llegada de mensajes: con `speed_ms` bajo/0 el backend puede emitir mas
+// generaciones por segundo de las que el navegador puede dibujar comodamente,
+// asi que en vez de renderizar en cada mensaje, se acumulan y se vuelcan
+// todos juntos en el siguiente frame disponible.
+let pendingStates = [];
+let flushScheduled = false;
+
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  requestAnimationFrame(flushPendingStates);
+}
+
+function flushPendingStates() {
+  flushScheduled = false;
+  if (!pendingStates.length) return;
+  const batch = pendingStates;
+  pendingStates = [];
+  states.push(...batch);
+  fitnessChart.pushAll(batch);
+  renderState(batch[batch.length - 1]);
+}
 
 async function init() {
   algorithms = await fetchAlgorithms();
@@ -104,14 +137,63 @@ function onAlgorithmChange() {
     opt.textContent = p.name;
     problemSelect.appendChild(opt);
   }
+  const customOpt = document.createElement("option");
+  customOpt.value = "custom";
+  customOpt.textContent = "Personalizado (tu formula de coste)";
+  problemSelect.appendChild(customOpt);
   paramInputs = buildForm(paramsForm, currentAlgorithm.params_schema);
   onProblemChange();
 }
 
 function onProblemChange() {
   const problemId = problemSelect.value;
+  if (problemId === "custom") {
+    problemDescription.textContent =
+      "Define tu propio problema escribiendo una formula de coste en el pseudolenguaje seguro.";
+    customProblemPanel.hidden = false;
+    return;
+  }
+  customProblemPanel.hidden = true;
   const problem = currentAlgorithm.problems.find((p) => p.id === problemId);
   problemDescription.textContent = problem ? problem.description : "";
+}
+
+function readCustomProblemDefinition() {
+  customError.hidden = true;
+  const n = parseInt(customN.value, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new Error("La dimension 'n' debe ser un entero >= 1");
+  }
+  const expression = customExpression.value.trim();
+  if (!expression) {
+    throw new Error("La expresion de coste no puede estar vacia");
+  }
+  let variables = {};
+  const rawVariables = customVariables.value.trim();
+  if (rawVariables) {
+    try {
+      variables = JSON.parse(rawVariables);
+    } catch (err) {
+      throw new Error(`Variables auxiliares: JSON invalido (${err.message})`);
+    }
+  }
+  const geneType = customGeneType.value;
+  const definition = {
+    name: "custom",
+    gene_type: geneType,
+    n,
+    expression,
+    maximize: customMaximize.checked,
+    variables,
+  };
+  if (geneType === "continuous") {
+    const parts = customBounds.value.split(",").map((v) => parseFloat(v.trim()));
+    if (parts.length !== 2 || parts.some((v) => Number.isNaN(v))) {
+      throw new Error("Rango invalido, usa el formato 'min, max' (p.ej. -10, 10)");
+    }
+    definition.bounds = parts;
+  }
+  return definition;
 }
 
 function resetVizForNewRun(meta) {
@@ -126,6 +208,8 @@ function resetVizForNewRun(meta) {
   }
   fitnessChart.reset();
   states = [];
+  pendingStates = [];
+  flushScheduled = false;
   replayPanel.hidden = true;
   replayRange.value = 0;
   replayRange.max = 0;
@@ -153,8 +237,14 @@ function renderState(state) {
     surface.render(state.population, state.best_solution);
   } else {
     const decoded = state.extra && state.extra.best_decoded;
-    statBestSolution.textContent = decoded || "";
-    renderStringViz(stringVizEl, problemMeta.target || "", state.best_solution);
+    if (problemMeta.target) {
+      statBestSolution.textContent = decoded || "";
+      stringVizEl.hidden = false;
+      renderStringViz(stringVizEl, problemMeta.target, state.best_solution);
+    } else {
+      statBestSolution.textContent = Array.isArray(decoded) ? decoded.join(", ") : decoded || "";
+      stringVizEl.hidden = true;
+    }
   }
 
   flowMapView.update(states, problemMeta);
@@ -261,6 +351,15 @@ async function onStart() {
     params: values,
     speed_ms: parseFloat(speedRange.value),
   };
+  if (problemSelect.value === "custom") {
+    try {
+      payload.problem_definition = readCustomProblemDefinition();
+    } catch (err) {
+      customError.textContent = err.message;
+      customError.hidden = false;
+      return;
+    }
+  }
 
   btnStart.disabled = true;
   statusLine.textContent = "Creando ejecucion...";
@@ -285,6 +384,7 @@ async function onStart() {
   if (ws) ws.close();
   ws = connectRunSocket(currentRunId, {
     onHistory(msg) {
+      pendingStates = [];
       states = msg.states || [];
       if (states.length) {
         fitnessChart.setAll(states);
@@ -292,11 +392,14 @@ async function onStart() {
       }
     },
     onState(state) {
-      states.push(state);
-      fitnessChart.push(state);
-      renderState(state);
+      pendingStates.push(state);
+      scheduleFlush();
     },
     onStatus(status) {
+      // Si quedan estados en el buffer (llegaron justo antes del mensaje
+      // de estado final), los volcamos ya mismo para que `states` este
+      // completo antes de habilitar el replay.
+      if (pendingStates.length) flushPendingStates();
       statusLine.textContent = statusLabel(status);
       if (status === "finished" || status === "stopped" || status === "error") {
         btnStart.disabled = false;

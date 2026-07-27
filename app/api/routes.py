@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from app.algorithms.genetic.custom_problem import CustomProblemError
 from app.api.runs import run_manager
 from app.api.schemas import CreateRunRequest, SpeedRequest
 from app.core.registry import registry
@@ -33,11 +34,14 @@ async def create_run(body: CreateRunRequest):
             problem_id=body.problem_id,
             params=body.params,
             speed_ms=body.speed_ms,
+            problem_definition=body.problem_definition,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except (CustomProblemError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return run.to_summary()
 
 

@@ -16,9 +16,28 @@
 //   verde    = mejor individuo de esa generacion
 //   gris     = semilla (individuo de la generacion 0)
 //
-// El renderizado es INCREMENTAL: cada llamada a `update()` solo agrega las
-// columnas (generaciones) nuevas que aun no se hayan dibujado, en vez de
-// reconstruir todo el SVG, para que ejecuciones largas sigan siendo fluidas.
+// RENDERIZADO VIRTUALIZADO: con ejecuciones largas (muchas generaciones
+// y/o poblaciones grandes) crear un nodo/arista SVG por cada individuo de
+// CADA generacion, para siempre, congela el navegador (el DOM/SVG termina
+// con cientos de miles o millones de elementos vivos). Para evitarlo:
+//   1) Columnas (generaciones): solo se mantienen montadas en el DOM las
+//      columnas visibles en el scroll horizontal del contenedor (+ un
+//      margen de columnas de repuesto). Al hacer scroll se desmontan las
+//      columnas que salen de vista y se montan las que entran, bajo
+//      demanda, leyendo los datos siempre desde `this.states` (que no se
+//      pierde: el historial completo lo sigue teniendo `app.js`).
+//   2) Filas (individuos): si la poblacion supera `MAX_ROWS`, solo se
+//      dibuja una muestra estratificada de individuos por columna (mas el
+//      mejor de esa generacion, que siempre se incluye), en vez de la
+//      poblacion completa.
+//   3) Resaltado de linaje (hover/click): en vez de depender de que los
+//      nodos ancestros esten montados, se recalcula el linaje completo
+//      directamente desde los datos (`this.states`) y se dibuja como una
+//      capa temporal (`overlayGroup`) independiente del grafo principal,
+//      por lo que el resaltado SIEMPRE es correcto sin importar que se
+//      haya virtualizado/muestreado.
+// Con esto, el costo en DOM queda acotado por "columnas visibles x filas
+// visibles" en todo momento, sin importar cuan larga sea la corrida.
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -34,6 +53,16 @@ const CROSSOVER_LABELS = {
   uniform: "uniforme",
   blend: "mezcla (blend)",
 };
+
+// Maximo de individuos dibujados por columna. Si la poblacion es mayor,
+// se muestra una muestra estratificada (mas el mejor de cada generacion).
+const MAX_ROWS = 150;
+// Columnas de margen (fuera del viewport visible) que se mantienen
+// montadas de mas, para que hacer scroll no muestre huecos en blanco.
+const COL_BUFFER = 6;
+// Limite de seguridad para el recorrido de ancestros al resaltar un
+// linaje (evita un recorrido descontrolado en casos patologicos).
+const MAX_CHAIN_NODES = 6000;
 
 function svgEl(tag, attrs) {
   const e = document.createElementNS(NS, tag);
@@ -111,6 +140,22 @@ function key(gen, idx) {
 }
 
 /**
+ * Elige `count` indices distribuidos uniformemente en [0, total). Se usa
+ * para muestrear individuos cuando la poblacion supera `MAX_ROWS`.
+ */
+function stratifiedSample(total, count) {
+  const set = new Set();
+  if (count >= total) {
+    for (let i = 0; i < total; i++) set.add(i);
+    return set;
+  }
+  for (let k = 0; k < count; k++) {
+    set.add(Math.round((k * (total - 1)) / (count - 1)));
+  }
+  return set;
+}
+
+/**
  * Vista interactiva del linaje evolutivo completo. Se instancia una vez
  * por pagina y se reutiliza durante toda la sesion; `reset()` se llama al
  * iniciar una nueva ejecucion.
@@ -132,27 +177,37 @@ export class FlowMapView {
     this.edgesGroup = null;
     this.nodesGroup = null;
     this.labelsGroup = null;
+    this.overlayGroup = null;
     this.popSize = 0;
     this.lastGen = -1;
     this.rowH = 12;
     this.colW = 52;
     this.marginX = 28;
     this.marginY = 18;
-    this.nodesByKey = new Map();
-    this.metaByKey = new Map();
-    this.incomingByKey = new Map(); // destKey -> [{fromKey, el}]
+    this.states = null;
+    this.problemMeta = null;
+    this.sampledIdx = null; // null = se dibujan todos los individuos
+    this.mountedGens = new Map(); // gen -> {nodeEls:[], edgeEls:[], labelEl, keys:[]}
+    this.nodesByKey = new Map(); // key -> <circle> (solo columnas montadas)
+    this.metaByKey = new Map(); // key -> info para tooltip (solo montadas)
     this.chainEls = [];
     this.hoverEls = [];
     this.selectedKey = null;
+    this._syncScheduled = false;
+    this._onScroll = null;
   }
 
   reset() {
+    if (this.container && this._onScroll) {
+      this.container.removeEventListener("scroll", this._onScroll);
+    }
     this._resetState();
   }
 
   _ensureSvg(popSize) {
     if (this.svg) return;
     this.popSize = popSize;
+    this.sampledIdx = popSize > MAX_ROWS ? stratifiedSample(popSize, MAX_ROWS) : null;
     const height = this.marginY * 2 + popSize * this.rowH;
     this.svg = svgEl("svg", {
       width: String(this.marginX * 2 + this.colW),
@@ -167,12 +222,17 @@ export class FlowMapView {
     this.edgesGroup = svgEl("g", { class: "flowmap-edges" });
     this.nodesGroup = svgEl("g", { class: "flowmap-nodes" });
     this.labelsGroup = svgEl("g", { class: "flowmap-gen-labels" });
+    this.overlayGroup = svgEl("g", { class: "flowmap-overlay" });
     this.svg.appendChild(this.defs);
     this.svg.appendChild(this.edgesGroup);
     this.svg.appendChild(this.nodesGroup);
     this.svg.appendChild(this.labelsGroup);
+    this.svg.appendChild(this.overlayGroup);
     this.container.innerHTML = "";
     this.container.appendChild(this.svg);
+
+    this._onScroll = () => this._scheduleSync();
+    this.container.addEventListener("scroll", this._onScroll, { passive: true });
   }
 
   // Gradientes horizontales (gris -> color) compartidos por TODAS las
@@ -225,28 +285,102 @@ export class FlowMapView {
 
   /**
    * Asegura que la red incluya todas las generaciones disponibles en
-   * `states` (0..states.length-1), agregando solo las columnas nuevas.
+   * `states` (0..states.length-1). En vez de montar TODO en el DOM, solo
+   * sincroniza la ventana de columnas actualmente visible (ver
+   * `_syncViewport`), lo que mantiene el costo acotado sin importar cuan
+   * larga sea la corrida.
    */
   update(states, problemMeta) {
     if (!states || !states.length) return;
+    this.states = states;
+    this.problemMeta = problemMeta;
     const popSize = states[0].population.length;
     this._ensureSvg(popSize);
-    this._growTo(states.length - 1);
-
-    const maximize = problemMeta ? problemMeta.maximize : true;
-    for (let gen = this.lastGen + 1; gen < states.length; gen++) {
-      this._addGeneration(gen, states[gen], maximize);
-    }
+    const wasAtEdge = this._isScrolledToEdge();
     this.lastGen = states.length - 1;
+    this._growTo(this.lastGen);
+    // Si el usuario estaba viendo el borde derecho (la generacion mas
+    // reciente), lo seguimos automaticamente a medida que llegan nuevas
+    // generaciones (como el auto-scroll de un chat). Si el usuario se
+    // desplazo manualmente hacia atras para inspeccionar el historial, se
+    // respeta esa posicion y no se lo interrumpe.
+    if (wasAtEdge) this.container.scrollLeft = this.container.scrollWidth;
+    this._syncViewport();
   }
 
-  _addGeneration(gen, state, maximize) {
+  _isScrolledToEdge() {
+    if (!this.container) return true;
+    const slack = this.colW * 2;
+    return (
+      this.container.scrollLeft + this.container.clientWidth >=
+      this.container.scrollWidth - slack
+    );
+  }
+
+  _scheduleSync() {
+    if (this._syncScheduled) return;
+    this._syncScheduled = true;
+    requestAnimationFrame(() => {
+      this._syncScheduled = false;
+      this._syncViewport();
+    });
+  }
+
+  _visibleColRange() {
+    const scrollLeft = this.container.scrollLeft || 0;
+    const width = this.container.clientWidth || 400;
+    const first = Math.floor((scrollLeft - this.marginX) / this.colW) - COL_BUFFER;
+    const last = Math.ceil((scrollLeft + width - this.marginX) / this.colW) + COL_BUFFER;
+    const lo = Math.max(0, first);
+    const hi = Math.min(this.lastGen, Math.max(lo, last));
+    return [lo, hi];
+  }
+
+  /**
+   * Monta las columnas (generaciones) dentro del rango visible actual y
+   * desmonta las que quedaron fuera, liberando sus nodos/aristas del DOM.
+   * Se llama al llegar nuevas generaciones y al hacer scroll horizontal.
+   */
+  _syncViewport() {
+    if (!this.svg || this.lastGen < 0 || !this.states) return;
+    const [lo, hi] = this._visibleColRange();
+    for (const gen of Array.from(this.mountedGens.keys())) {
+      if (gen < lo || gen > hi) this._unmountGeneration(gen);
+    }
+    for (let gen = lo; gen <= hi; gen++) {
+      if (!this.mountedGens.has(gen)) this._buildGeneration(gen);
+    }
+  }
+
+  _unmountGeneration(gen) {
+    const rec = this.mountedGens.get(gen);
+    if (!rec) return;
+    rec.nodeEls.forEach((el) => el.remove());
+    rec.edgeEls.forEach((el) => el.remove());
+    if (rec.labelEl) rec.labelEl.remove();
+    rec.keys.forEach((k) => {
+      this.nodesByKey.delete(k);
+      this.metaByKey.delete(k);
+    });
+    this.mountedGens.delete(gen);
+  }
+
+  _buildGeneration(gen) {
+    const state = this.states[gen];
+    if (!state) return;
+    const maximize = this.problemMeta ? this.problemMeta.maximize : true;
     const x = this._xFor(gen);
     const fits = state.extra && state.extra.population_fitness;
     const bestIdx = findBestIndex(fits, maximize);
     const lineage = gen > 0 ? state.extra && state.extra.lineage : null;
 
+    const nodeEls = [];
+    const edgeEls = [];
+    const keys = [];
+
     for (let idx = 0; idx < this.popSize; idx++) {
+      if (this.sampledIdx && !this.sampledIdx.has(idx) && idx !== bestIdx) continue;
+
       const y = this._yFor(idx);
       const k = key(gen, idx);
       let color = COLOR_SOURCE;
@@ -265,7 +399,6 @@ export class FlowMapView {
         crossoverMethod = rec.crossover_method || null;
 
         parents.forEach((parentIdx) => {
-          const fromKey = key(gen - 1, parentIdx);
           const x1 = this._xFor(gen - 1);
           const y1 = this._yFor(parentIdx);
           const path = svgEl("path", {
@@ -273,12 +406,9 @@ export class FlowMapView {
             class: "flowmap-edge" + (mutatedCount ? " flowmap-edge-mutated" : ""),
             stroke: this._gradientFor(label),
             fill: "none",
-            "data-from": fromKey,
-            "data-to": k,
           });
           this.edgesGroup.appendChild(path);
-          if (!this.incomingByKey.has(k)) this.incomingByKey.set(k, []);
-          this.incomingByKey.get(k).push({ fromKey, el: path });
+          edgeEls.push(path);
         });
       }
 
@@ -296,6 +426,8 @@ export class FlowMapView {
         "data-idx": String(idx),
       });
       this.nodesGroup.appendChild(circle);
+      nodeEls.push(circle);
+      keys.push(k);
       this.nodesByKey.set(k, circle);
       this.metaByKey.set(k, {
         gen,
@@ -303,7 +435,6 @@ export class FlowMapView {
         fitness: fits ? fits[idx] : null,
         label,
         parents,
-        parentKeys: parents.map((p) => key(gen - 1, p)),
         mutatedCount,
         crossoverMethod,
         isBest,
@@ -318,6 +449,8 @@ export class FlowMapView {
     });
     genLabel.textContent = String(gen);
     this.labelsGroup.appendChild(genLabel);
+
+    this.mountedGens.set(gen, { nodeEls, edgeEls, labelEl: genLabel, keys });
   }
 
   _bindEvents() {
@@ -351,57 +484,6 @@ export class FlowMapView {
     });
   }
 
-  /**
-   * Recorre hacia atras TODO el arbol de ancestros de `startKey` (ambos
-   * padres en cada cruce, recursivamente, hasta la generacion 0),
-   * devolviendo el conjunto de nodos y aristas involucrados. Usa un set de
-   * visitados para no repetir trabajo cuando distintas ramas comparten un
-   * mismo ancestro, manteniendo el costo acotado por el tamano total del
-   * grafo (generaciones x poblacion) en vez de crecer exponencialmente.
-   */
-  _collectAncestry(startKey) {
-    const nodeKeys = new Set();
-    const edges = []; // {fromKey, toKey}
-    const queue = [startKey];
-    while (queue.length) {
-      const k = queue.shift();
-      if (nodeKeys.has(k)) continue;
-      nodeKeys.add(k);
-      const meta = this.metaByKey.get(k);
-      if (!meta || !meta.parentKeys || !meta.parentKeys.length) continue;
-      meta.parentKeys.forEach((pk) => {
-        edges.push({ fromKey: pk, toKey: k });
-        if (!nodeKeys.has(pk)) queue.push(pk);
-      });
-    }
-    return { nodeKeys, edges };
-  }
-
-  /**
-   * Marca con `nodeClass`/`edgeClass` todos los nodos y aristas del
-   * ancestro completo de `startKey`, acumulando los elementos tocados en
-   * `touched` para poder limpiarlos despues.
-   */
-  _applyAncestryHighlight(startKey, nodeClass, edgeClass, touched) {
-    const { nodeKeys, edges } = this._collectAncestry(startKey);
-    nodeKeys.forEach((k) => {
-      const el = this.nodesByKey.get(k);
-      if (el) {
-        el.classList.add(nodeClass);
-        touched.push(el);
-      }
-    });
-    edges.forEach(({ fromKey, toKey }) => {
-      const incoming = this.incomingByKey.get(toKey) || [];
-      incoming.forEach((e) => {
-        if (e.fromKey === fromKey) {
-          e.el.classList.add(edgeClass);
-          touched.push(e.el);
-        }
-      });
-    });
-  }
-
   _hoverNode(circle) {
     this._clearHover();
     const gen = Number(circle.getAttribute("data-gen"));
@@ -411,13 +493,13 @@ export class FlowMapView {
     if (!meta) return;
 
     this.svg.classList.add("has-hover");
-    this._applyAncestryHighlight(k, "flowmap-hl", "flowmap-hl", this.hoverEls);
+    this._drawAncestryOverlay(gen, idx, "flowmap-hl", "flowmap-hl", this.hoverEls);
 
     this._showTooltip(meta);
   }
 
   _clearHover() {
-    this.hoverEls.forEach((el) => el.classList.remove("flowmap-hl"));
+    this.hoverEls.forEach((el) => el.remove());
     this.hoverEls = [];
     if (this.svg) this.svg.classList.remove("has-hover");
     this._hideTooltip();
@@ -447,28 +529,105 @@ export class FlowMapView {
   }
 
   /**
+   * Recorre hacia atras TODO el arbol de ancestros de (gen, idx) leyendo
+   * los datos directamente de `this.states` (no del DOM), asi que el
+   * resultado es siempre correcto sin importar que columnas/filas esten
+   * montadas o muestreadas en ese momento. Devuelve los nodos (con su
+   * color real) y las aristas necesarias para dibujar el resaltado.
+   */
+  _ancestryChainData(gen, idx) {
+    const nodes = [];
+    const edges = [];
+    const seen = new Set();
+    const queue = [[gen, idx]];
+    const maximize = this.problemMeta ? this.problemMeta.maximize : true;
+
+    while (queue.length && seen.size < MAX_CHAIN_NODES) {
+      const [g, i] = queue.shift();
+      const k = key(g, i);
+      if (seen.has(k)) continue;
+      seen.add(k);
+
+      const state = this.states[g];
+      if (!state) continue;
+      const fits = state.extra && state.extra.population_fitness;
+      const bestIdx = findBestIndex(fits, maximize);
+      let color = COLOR_SOURCE;
+
+      if (g > 0) {
+        const lineage = state.extra && state.extra.lineage;
+        const rec = lineage && lineage[i];
+        if (rec) {
+          const info = edgesForRecord(rec);
+          color = info.color;
+          const mutated = !!(rec.mutated_genes && rec.mutated_genes.length);
+          info.parents.forEach((p) => {
+            edges.push({ fromGen: g - 1, fromIdx: p, toGen: g, toIdx: i, label: info.label, mutated });
+            queue.push([g - 1, p]);
+          });
+        }
+      }
+      nodes.push({ gen: g, idx: i, color, isBest: i === bestIdx });
+    }
+    return { nodes, edges };
+  }
+
+  /**
+   * Dibuja el linaje completo de (gen, idx) como elementos SVG temporales
+   * en `overlayGroup`, independientes del grafo principal (virtualizado).
+   * Se acumulan en `targetArray` para poder borrarlos despues.
+   */
+  _drawAncestryOverlay(gen, idx, nodeClass, edgeClass, targetArray) {
+    const { nodes, edges } = this._ancestryChainData(gen, idx);
+    edges.forEach((e) => {
+      const x1 = this._xFor(e.fromGen);
+      const y1 = this._yFor(e.fromIdx);
+      const x2 = this._xFor(e.toGen);
+      const y2 = this._yFor(e.toIdx);
+      const path = svgEl("path", {
+        d: curvePath(x1, y1, x2, y2),
+        class: `flowmap-edge ${edgeClass}` + (e.mutated ? " flowmap-edge-mutated" : ""),
+        stroke: this._gradientFor(e.label),
+        fill: "none",
+      });
+      this.overlayGroup.appendChild(path);
+      targetArray.push(path);
+    });
+    nodes.forEach((n) => {
+      const x = this._xFor(n.gen);
+      const y = this._yFor(n.idx);
+      const circle = svgEl("circle", {
+        cx: String(x),
+        cy: String(y),
+        r: String(n.isBest ? 4.5 : 3),
+        class: `flowmap-node ${nodeClass}`,
+        fill: n.isBest ? COLOR_BEST : n.color,
+      });
+      this.overlayGroup.appendChild(circle);
+      targetArray.push(circle);
+    });
+  }
+
+  /**
    * Resalta el linaje COMPLETO (todos los ancestros, incluyendo AMBOS
    * padres en cada cruce, desde la generacion 0 hasta el individuo
-   * indicado) y atenua el resto de la red.
+   * indicado) y atenua el resto de la red (via CSS, `.has-chain`).
    */
   highlightChain(gen, idx) {
     this.clearChain();
     if (gen == null || idx == null || !this.svg) return;
     const k = key(gen, idx);
-    if (!this.nodesByKey.has(k)) return;
+    if (!this.metaByKey.has(k)) return;
 
     this.svg.classList.add("has-chain");
-    this._applyAncestryHighlight(k, "flowmap-chain-node", "flowmap-chain-edge", this.chainEls);
+    this._drawAncestryOverlay(gen, idx, "flowmap-chain-node", "flowmap-chain-edge", this.chainEls);
     this.selectedKey = k;
   }
 
   clearChain() {
-    this.chainEls.forEach((el) =>
-      el.classList.remove("flowmap-chain-node", "flowmap-chain-edge")
-    );
+    this.chainEls.forEach((el) => el.remove());
     this.chainEls = [];
     if (this.svg) this.svg.classList.remove("has-chain");
     this.selectedKey = null;
   }
 }
-

@@ -24,8 +24,9 @@ class GAParams(BaseModel):
         0.8, ge=0, le=1, title="Tasa de cruce",
         description="Probabilidad de que dos padres se crucen (si no, pasan tal cual).",
     )
-    crossover_type: Literal["one_point", "two_point", "uniform", "blend"] = Field(
+    crossover_type: Literal["one_point", "two_point", "uniform", "blend", "order"] = Field(
         "uniform", title="Tipo de cruce",
+        description="'order' (OX) es el recomendado/valido para problemas de tipo permutacion (p.ej. TSP).",
     )
     mutation_rate: float = Field(
         0.05, ge=0, le=1, title="Tasa de mutacion",

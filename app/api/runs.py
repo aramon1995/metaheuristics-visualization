@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from fastapi import WebSocket
 
+from app.algorithms.genetic.custom_problem import build_custom_problem
 from app.core.registry import registry
 
 RunStatus = Literal["running", "paused", "finished", "stopped", "error"]
@@ -58,22 +59,41 @@ class RunManager:
     def __init__(self) -> None:
         self._runs: dict[str, Run] = {}
 
-    def create_and_start(self, algorithm_id: str, problem_id: str, params: dict[str, Any], speed_ms: float) -> Run:
+    def create_and_start(
+        self,
+        algorithm_id: str,
+        problem_id: str,
+        params: dict[str, Any],
+        speed_ms: float,
+        problem_definition: dict[str, Any] | None = None,
+    ) -> Run:
         descriptor = registry.get(algorithm_id)
-        problem_descriptor = descriptor.problem_by_id(problem_id)
-        problem = problem_descriptor.factory()
+        if problem_id == "custom":
+            if not problem_definition:
+                raise ValueError("problem_definition es requerido cuando problem_id='custom'")
+            problem = build_custom_problem(problem_definition)
+            problem_name = problem.name
+        else:
+            problem_descriptor = descriptor.problem_by_id(problem_id)
+            problem = problem_descriptor.factory()
+            problem_name = problem_descriptor.name
         params_model = descriptor.params_model(**params)
         metaheuristic = descriptor.factory(params_model, problem)
 
         run_id = uuid.uuid4().hex[:12]
         problem_meta = {
             "id": problem_id,
-            "name": problem_descriptor.name,
+            "name": problem_name,
             "dim": problem.dim,
             "bounds": problem.bounds,
             "maximize": problem.maximize,
+            "gene_type": problem.gene_type,
             "surface_grid": problem.surface_grid(),
             "target": getattr(problem, "target", None),
+            "cities": getattr(problem, "cities", None),
+            "weight": getattr(problem, "weight", None),
+            "value": getattr(problem, "value", None),
+            "capacity": getattr(problem, "capacity", None),
         }
         run = Run(
             id=run_id,

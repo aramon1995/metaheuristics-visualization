@@ -14,6 +14,8 @@ PROBLEM_METADATA = {
     "ackley": ("Ackley", "Funcion multimodal, muy plana lejos del optimo. Optimo en (0, 0)."),
     "himmelblau": ("Himmelblau", "Funcion con 4 minimos globales identicos."),
     "string_match": ("Coincidencia de cadena", "Evolucionar texto aleatorio hasta igualar 'HELLO WORLD'."),
+    "tsp": ("Viajante de comercio (TSP)", "Encontrar la ruta mas corta que visita 12 ciudades una sola vez. Genoma de permutacion, cruce OX."),
+    "knapsack": ("Mochila 0-1", "Elegir que items llevar para maximizar el valor sin exceder la capacidad de la mochila. Genoma binario."),
 }
 
 

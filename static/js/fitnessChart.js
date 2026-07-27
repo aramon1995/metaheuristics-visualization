@@ -47,6 +47,20 @@ export function createFitnessChart(canvas) {
       chart.data.datasets[2].data.push(state.worst_fitness);
       chart.update("none");
     },
+    // Igual que `push`, pero para varios estados a la vez: agrega todos
+    // los puntos y llama a `chart.update("none")` UNA sola vez, en vez de
+    // una vez por estado (evita recalcular el layout del grafico N veces
+    // cuando llegan varios mensajes de la misma tanda/frame).
+    pushAll(newStates) {
+      if (!newStates || !newStates.length) return;
+      newStates.forEach((state) => {
+        chart.data.labels.push(state.iteration);
+        chart.data.datasets[0].data.push(state.best_fitness);
+        chart.data.datasets[1].data.push(state.avg_fitness);
+        chart.data.datasets[2].data.push(state.worst_fitness);
+      });
+      chart.update("none");
+    },
     showUpTo(index, states) {
       setAll(states.slice(0, index + 1));
     },

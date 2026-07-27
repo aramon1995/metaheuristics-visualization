@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import numpy as np
 
+from app.algorithms.genetic.custom_problem import knapsack_problem, tsp_problem
 from app.core.base import OptimizationProblem
 
 # --------------------------------------------------------------------------
@@ -169,4 +170,6 @@ PROBLEM_FACTORIES = {
     "ackley": ackley_problem,
     "himmelblau": himmelblau_problem,
     "string_match": lambda: StringMatchProblem("HELLO WORLD"),
+    "tsp": lambda: tsp_problem(n=12, seed=42),
+    "knapsack": lambda: knapsack_problem(n=15, seed=7),
 }

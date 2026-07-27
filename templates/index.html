@@ -27,6 +27,44 @@
         <p id="problem-description" class="hint"></p>
       </section>
 
+      <section class="panel" id="custom-problem-panel" hidden>
+        <h2>1b. Formula de coste personalizada</h2>
+        <label>
+          Tipo de genoma
+          <select id="custom-gene-type">
+            <option value="continuous">Continuo (vector de numeros reales)</option>
+            <option value="binary">Binario (0/1, p.ej. seleccion de items)</option>
+            <option value="permutation">Permutacion (p.ej. orden de visita)</option>
+          </select>
+        </label>
+        <label>
+          Dimension (n)
+          <input type="number" id="custom-n" min="1" value="8" />
+        </label>
+        <label>
+          Rango [min, max] (solo genoma continuo)
+          <input type="text" id="custom-bounds" value="-10, 10" />
+        </label>
+        <label>
+          Expresion de coste
+          <textarea id="custom-expression" rows="3" placeholder="sum(v*v for v in x)"></textarea>
+        </label>
+        <label>
+          Variables auxiliares (JSON, opcional)
+          <textarea id="custom-variables" rows="3" placeholder='{"weight": [2,3,4], "value": [10,20,30], "capacity": 5}'></textarea>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="custom-maximize" checked />
+          Maximizar (si no, se minimiza)
+        </label>
+        <p class="hint">
+          El genoma se expone con el nombre <code>x</code> (continuo/binario) o
+          <code>tour</code> (permutacion), y <code>n</code> es la dimension.
+          Ejemplo TSP: <code>sum(distance[tour[i]][tour[(i+1)%n]] for i in range(n))</code>.
+        </p>
+        <p id="custom-error" class="hint error" hidden></p>
+      </section>
+
       <section class="panel">
         <h2>2. Parametros</h2>
         <form id="params-form"></form>

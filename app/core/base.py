@@ -50,7 +50,7 @@ class OptimizationProblem(ABC):
 
     name: str = "problem"
     maximize: bool = True
-    gene_type: Literal["continuous", "discrete"] = "continuous"
+    gene_type: Literal["continuous", "discrete", "permutation"] = "continuous"
 
     @property
     @abstractmethod
